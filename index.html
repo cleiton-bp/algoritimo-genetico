@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Labirinto Genético</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="app__header">
+        <h1 class="brand">
+          Labirinto Genético -
+          <span class="sub_title_header"
+            >AP2 - fundamentos de inteligência artificial</span
+          >
+        </h1>
+      </header>
+
+      <section class="panel">
+        <div class="maze-wrap">
+          <div class="maze-overlay">
+            <div class="hud">
+              <div class="stat">
+                <span class="stat__label">Geração</span>
+                <span id="generation" class="stat__value">—</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Fitness</span>
+                <span id="fitness" class="stat__value">—</span>
+              </div>
+              <div
+                class="stat"
+                title="Quantidade de indivíduos mostrados na tela / tamanho total da população"
+              >
+                <span class="stat__label">Indivíduos</span>
+                <span id="individuals" class="stat__value">—</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Status</span>
+                <span id="status" class="stat__value">Pronto</span>
+              </div>
+            </div>
+
+            <div class="controls">
+              <button id="startBtn" class="btn btn--accent">Iniciar</button>
+              <button id="stopBtn" class="btn">Parar</button>
+              <button
+                id="editBtn"
+                class="btn"
+                aria-pressed="false"
+                title="Alternar modo de edição do labirinto"
+              >
+                Editar labirinto
+              </button>
+              <!-- removido painel dos controles para não aumentar a altura dos botões -->
+            </div>
+          </div>
+          <canvas
+            id="maze-canvas"
+            aria-label="Visualização do labirinto"
+          ></canvas>
+        </div>
+
+        <aside class="side">
+          <div class="card settings">
+            <h3>Ajustes a Velocidade</h3>
+            <div class="edit-row" style="margin-top: 6px">
+              <input
+                id="speedSlider"
+                type="range"
+                min="0"
+                max="200"
+                step="5"
+                value="10"
+                style="width: 100%"
+              />
+              <span
+                id="speedValue"
+                class="stat__value"
+                style="font-size: 1rem; margin-left: 8px; white-space: nowrap"
+                >10 ms</span
+              >
+            </div>
+          </div>
+          <div class="card info">
+            <h3>Sobre a Interface</h3>
+            <p class="muted">
+              Algoritmos genéticos (AG) são métodos de busca e otimização
+              inspirados na evolução biológica. Eles mantêm uma população de
+              soluções, avaliam a <em>aptidão</em> (fitness) de cada uma e usam
+              seleção, <em>crossover</em> e mutação para produzir soluções cada
+              vez melhores.
+            </p>
+            <a
+              class="link-btn link-btn--accent"
+              href="https://bioinfo.com.br/algoritmos-geneticos/"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Abrir artigo introdutório sobre algoritmos genéticos"
+            >
+              Saber mais sobre AG <span aria-hidden="true">↗</span>
+            </a>
+          </div>
+
+          <div class="card legend">
+            <h3>Dicas</h3>
+            <ul>
+              <li>
+                <span class="chip chip--start">L</span> Início (posição inicial)
+              </li>
+              <li><span class="chip chip--goal">G</span> Objetivo (destino)</li>
+              <p class="muted">
+                Editar labirinto: clique e arraste para adicionar/remover
+                paredes. S e G não viram parede.
+              </p>
+            </ul>
+          </div>
+        </aside>
+      </section>
+
+      <footer class="app__footer"></footer>
+    </main>
+
+    <script type="module" src="ga-ui.js"></script>
+  </body>
+</html>

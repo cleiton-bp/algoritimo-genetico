@@ -1,0 +1,752 @@
+/*
+  Guia de leitura rápido (passo a passo)
+  ------------------------------------------------------------
+  Passo 1. Configuração inicial: grid do labirinto
+  Passo 2. Utilitários
+  Passo 3. Desenhar o labirinto (grid) no canvas
+  Passo 4. Redimensionamento responsivo do canvas e das células
+  Passo 5. Conversão de clique/mouse em coordenadas de célula
+  Passo 6. Motor de Algoritmo Genético (GA real)
+  Passo 7. Desenhar os caminhos candidatos (com cor e brilho)
+  Passo 8. Desenhar marcadores de início (L) e objetivo (G) por cima
+  Passo 9. Loop de animação (tick): evolui gerações, redesenha e verifica solução
+  Passo 10. Controles de execução (Start/Stop)
+  Passo 11. Modo edição do labirinto (toggle)
+  Passo 12. Eventos de mouse para pintar paredes
+  Passo 13. Estado inicial e listener de resize
+*/
+
+// Passo 1 — Configuração inicial
+// Protótipo de UI: renderiza um labirinto e anima caminhos com um GA real.
+const GRID = [
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+  [0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
+  [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0],
+  [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0],
+  [1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+];
+
+const ROWS = GRID.length,
+  COLS = GRID[0].length;
+const canvas = document.getElementById("maze-canvas");
+const ctx = canvas.getContext("2d");
+// cellSize será definido corretamente no resizeCanvas(); iniciamos com 1.
+let cellSize = 1;
+
+const generationEl = document.getElementById("generation");
+const fitnessEl = document.getElementById("fitness");
+const statusEl = document.getElementById("status");
+const individualsEl = document.getElementById("individuals");
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const editBtn = document.getElementById("editBtn");
+const editPanel = document.getElementById("editPanel");
+const popSizeInput = document.getElementById("popSizeInput");
+const speedSlider = document.getElementById("speedSlider");
+const speedValue = document.getElementById("speedValue");
+// const clearBtn = document.getElementById("clearBtn");
+
+let running = false;
+let gen = 0;
+let animId = null;
+let candidates = [];
+let editMode = false;
+let painting = null; // null | 0 | 1
+
+// Controle de animação por passo (dentro de cada geração)
+const CANDIDATES_TO_SHOW = 8; // quantos indivíduos destacar na tela
+let STEP_DELAY_MS = 10; // atraso entre passos (ms) — padrão inicial mais rápido
+let stepIdx = 0; // índice do passo atual sendo exibido
+let currentMaxStep = 0; // maior quantidade de passos entre os candidatos atuais
+let currentBestSim = null; // simulação do melhor indivíduo da geração atual
+
+// Passo 2 — Utilitários
+// hsl: gera string de cor CSS em HSL. Único utilitário necessário nesta UI.
+function hsl(h, s, l) {
+  return `hsl(${h} ${s}% ${l}%)`;
+}
+
+// Auxiliar para centralizar o desenho no canvas
+// Usa translate para posicionar o grid no centro do canvas e executa a função de desenho.
+function withCentered(drawFn) {
+  ctx.save();
+  ctx.translate(
+    (canvas.width - cellSize * COLS) / 2,
+    (canvas.height - cellSize * ROWS) / 2
+  );
+  drawFn();
+  ctx.restore();
+}
+
+// Passo 3 — Desenhar o labirinto (grid)
+// 1 = parede (azul escuro), 0 = livre (fundo mais escuro). Desenha também linhas sutis de grade.
+function drawGrid() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  withCentered(() => {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const x = c * cellSize,
+          y = r * cellSize;
+        ctx.fillStyle = GRID[r][c] === 1 ? "#1e3647" : "#071018";
+        ctx.fillRect(x, y, cellSize, cellSize);
+        // linhas sutis de grade
+        ctx.strokeStyle = "rgba(255,255,255,0.05)";
+        ctx.strokeRect(x + 0.5, y + 0.5, cellSize - 1, cellSize - 1);
+      }
+    }
+  });
+}
+
+// Passo 4 — Redimensionamento responsivo do canvas
+// Ajusta tamanho físico do canvas (resolução) e recalcula cellSize mantendo células quadradas.
+// Considera devicePixelRatio para nitidez em telas de alta densidade.
+function resizeCanvas() {
+  // Ajusta o canvas para ocupar largura total e respeitar a altura CSS
+  const dpr = window.devicePixelRatio || 1;
+  // Prioriza dimensões reais do elemento/pai; se ausentes, usa viewport
+  const cssWidth = Math.floor(
+    canvas.clientWidth ||
+      (canvas.parentElement && canvas.parentElement.clientWidth) ||
+      window.innerWidth
+  );
+  const cssHeight = Math.floor(
+    canvas.clientHeight ||
+      (canvas.parentElement && canvas.parentElement.clientHeight) ||
+      window.innerHeight
+  );
+  canvas.width = Math.floor(cssWidth * dpr);
+  canvas.height = Math.floor(cssHeight * dpr);
+  // tamanho da célula usa a menor dimensão para manter quadrados
+  cellSize = Math.floor(Math.min(canvas.width / COLS, canvas.height / ROWS));
+  drawGrid();
+  if (candidates.length) drawCandidates();
+  // garantir S/G visíveis mesmo após redimensionar
+  drawStartGoalTop();
+}
+
+// Passo 5 — Converter posição do mouse para célula (r, c) do grid
+function cellFromEvent(evt) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const cx = (evt.clientX - rect.left) * scaleX;
+  const cy = (evt.clientY - rect.top) * scaleY;
+  const offX = (canvas.width - cellSize * COLS) / 2;
+  const offY = (canvas.height - cellSize * ROWS) / 2;
+  const x = cx - offX;
+  const y = cy - offY;
+  if (x < 0 || y < 0) return null;
+  const c = Math.floor(x / cellSize);
+  const r = Math.floor(y / cellSize);
+  if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return null;
+  return { r, c };
+}
+
+const GOAL_R = ROWS - 1,
+  GOAL_C = COLS - 1;
+
+// Configuração do GA (usa o mesmo GRID da UI)
+const START = [0, 0];
+const GOAL = [GOAL_R, GOAL_C];
+const DIRS = [
+  [-1, 0], // cima
+  [1, 0], // baixo
+  [0, -1], // esquerda
+  [0, 1], // direita
+];
+function inBounds(r, c) {
+  return r >= 0 && r < ROWS && c >= 0 && c < COLS;
+}
+
+// Distância Manhattan — usada para guiar a caminhada em direção ao objetivo
+function manhattan(r, c, tr, tc) {
+  return Math.abs(tr - r) + Math.abs(tc - c);
+}
+
+// Campo de distâncias (BFS) até o objetivo considerando paredes
+// Útil para dar um gradiente de fitness mais informativo do que Manhattan em labirintos.
+let DIST = null; // matriz ROWS x COLS com distância mínima até GOAL; -1 para inalcançável
+function computeDistanceField() {
+  const dist = Array.from({ length: ROWS }, () => Array(COLS).fill(-1));
+  const q = [];
+  dist[GOAL_R][GOAL_C] = 0;
+  q.push([GOAL_R, GOAL_C]);
+  while (q.length) {
+    const [r, c] = q.shift();
+    const d = dist[r][c];
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr,
+        nc = c + dc;
+      if (inBounds(nr, nc) && GRID[nr][nc] === 0 && dist[nr][nc] === -1) {
+        dist[nr][nc] = d + 1;
+        q.push([nr, nc]);
+      }
+    }
+  }
+  DIST = dist;
+}
+
+function startIsReachable() {
+  if (!DIST) return true;
+  return DIST[START[0]][START[1]] !== -1;
+}
+
+// Passo 6 — Motor de Algoritmo Genético (GA real)
+// Implementa população, fitness, seleção por torneio, crossover e mutação.
+// Parâmetros ajustados para grid 16x16 com boa fluidez:
+// - MAX_STEPS: limite de passos do gene (tamanho do caminho)
+// - POP_SIZE: tamanho da população por geração
+// - MUT_RATE: taxa de mutação por gene
+// - ELITISM: número de melhores indivíduos preservados
+// - TOURNAMENT_SIZE: pressão seletiva na seleção por torneio
+// Dica: aumentar POP_SIZE/steps melhora a busca mas pode reduzir FPS.
+const MAX_STEPS = ROWS * COLS; // antes 2x; agora 1x o número de células
+let POP_SIZE = 60; // ajustável via painel de edição
+const MUT_RATE = 0.05;
+const ELITISM = 2;
+const TOURNAMENT_SIZE = 4;
+
+function randomGene(len = MAX_STEPS) {
+  const g = new Uint8Array(len);
+  for (let i = 0; i < len; i++) g[i] = Math.floor(Math.random() * 4);
+  return g;
+}
+
+function simulate(gene, start = START) {
+  let r = start[0],
+    c = start[1];
+  const path = [{ r, c }];
+  let collisions = 0;
+  for (let i = 0; i < gene.length; i++) {
+    const [dr, dc] = DIRS[gene[i]];
+    const nr = r + dr,
+      nc = c + dc;
+    if (inBounds(nr, nc) && GRID[nr][nc] === 0) {
+      r = nr;
+      c = nc;
+      const last = path[path.length - 1];
+      // evita repetir a mesma célula consecutiva para reduzir segmentos redundantes
+      if (!last || last.r !== r || last.c !== c) path.push({ r, c });
+      if (r === GOAL[0] && c === GOAL[1])
+        return { path, reached: true, steps: i + 1, end: [r, c], collisions };
+    } else {
+      collisions++;
+      path.push({ r, c });
+    }
+  }
+  return { path, reached: false, steps: gene.length, end: [r, c], collisions };
+}
+
+function fitnessGA(gene) {
+  const sim = simulate(gene);
+  if (sim.reached) {
+    return 10000 + (MAX_STEPS - sim.steps) * 10 - sim.collisions * 2;
+  }
+  // Preferir distância de grade (BFS) até o objetivo; fallback para Manhattan se indisponível
+  const dGrid = DIST ? DIST[sim.end[0]][sim.end[1]] : -1;
+  const d =
+    dGrid >= 0 ? dGrid : manhattan(sim.end[0], sim.end[1], GOAL[0], GOAL[1]);
+  // Também considerar a menor distância ao objetivo atingida ao longo do caminho
+  let minD = Infinity;
+  for (const p of sim.path) {
+    const dd = DIST ? DIST[p.r][p.c] : -1;
+    if (dd >= 0 && dd < minD) minD = dd;
+  }
+  if (!Number.isFinite(minD)) minD = d;
+  // Penalização ponderada: distância final (mais forte) + melhor aproximação (moderada) + colisões + leve custo de passos
+  return -(d * 80 + minD * 30 + sim.collisions * 5 + sim.steps * 0.1);
+}
+
+function tournamentSelect(pop, fits) {
+  let bestIdx = -1,
+    bestFit = -Infinity;
+  for (let i = 0; i < TOURNAMENT_SIZE; i++) {
+    const idx = Math.floor(Math.random() * pop.length);
+    if (fits[idx] > bestFit) {
+      bestFit = fits[idx];
+      bestIdx = idx;
+    }
+  }
+  return pop[bestIdx];
+}
+
+function crossover(a, b) {
+  if (a.length !== b.length) throw new Error("Genes must have same length");
+  const point = 1 + Math.floor(Math.random() * (a.length - 1));
+  const child = new Uint8Array(a.length);
+  for (let i = 0; i < point; i++) child[i] = a[i];
+  for (let i = point; i < b.length; i++) child[i] = b[i];
+  return child;
+}
+
+function mutate(g) {
+  for (let i = 0; i < g.length; i++) {
+    if (Math.random() < MUT_RATE) {
+      if (Math.random() < 0.7) {
+        const delta = Math.random() < 0.5 ? -1 : 1;
+        g[i] = (g[i] + delta + 4) % 4;
+      } else {
+        g[i] = Math.floor(Math.random() * 4);
+      }
+    }
+  }
+  return g;
+}
+
+// Estado do GA
+let ga = {
+  pop: [],
+  fits: [],
+  bestGene: null,
+  bestFit: -Infinity,
+  globalBestGene: null,
+  globalBestFit: -Infinity,
+  initialized: false,
+};
+
+function initGA() {
+  ga.pop = Array.from({ length: POP_SIZE }, () => randomGene());
+  ga.fits = ga.pop.map(fitnessGA);
+  ga.bestGene = ga.pop[0];
+  ga.bestFit = ga.fits[0];
+  for (let i = 1; i < ga.pop.length; i++) {
+    if (ga.fits[i] > ga.bestFit) {
+      ga.bestFit = ga.fits[i];
+      ga.bestGene = ga.pop[i];
+    }
+  }
+  ga.globalBestFit = ga.bestFit;
+  ga.globalBestGene = new Uint8Array(ga.bestGene);
+  ga.initialized = true;
+}
+
+function evolveOneGeneration() {
+  // atualiza melhor atual
+  for (let i = 0; i < ga.pop.length; i++) {
+    if (ga.fits[i] > ga.bestFit) {
+      ga.bestFit = ga.fits[i];
+      ga.bestGene = ga.pop[i];
+    }
+  }
+
+  // elitismo
+  const ranked = ga.pop
+    .map((g, i) => ({ g, f: ga.fits[i] }))
+    .sort((a, b) => b.f - a.f);
+  const elite = ranked.slice(0, ELITISM).map((e) => new Uint8Array(e.g));
+
+  const newPop = [...elite];
+  while (newPop.length < POP_SIZE) {
+    const p1 = tournamentSelect(ga.pop, ga.fits);
+    const p2 = tournamentSelect(ga.pop, ga.fits);
+    let child = crossover(p1, p2);
+    child = mutate(child);
+    newPop.push(child);
+  }
+  ga.pop = newPop;
+  ga.fits = ga.pop.map(fitnessGA);
+
+  // recomputa melhor após evolução
+  ga.bestGene = ga.pop[0];
+  ga.bestFit = ga.fits[0];
+  for (let i = 1; i < ga.pop.length; i++) {
+    if (ga.fits[i] > ga.bestFit) {
+      ga.bestFit = ga.fits[i];
+      ga.bestGene = ga.pop[i];
+    }
+  }
+
+  if (ga.bestFit > ga.globalBestFit) {
+    ga.globalBestFit = ga.bestFit;
+    ga.globalBestGene = new Uint8Array(ga.bestGene);
+  }
+}
+
+function topKCandidates(k = 8) {
+  const rankedIdx = ga.fits
+    .map((f, i) => ({ i, f }))
+    .sort((a, b) => b.f - a.f)
+    .slice(0, k)
+    .map(({ i }) => i);
+  const arr = [];
+  for (const idx of rankedIdx) {
+    const sim = simulate(ga.pop[idx]);
+    arr.push({
+      path: sim.path, // formato {r,c} compatível com drawCandidates()
+      fitness: ga.fits[idx],
+      reached: sim.reached,
+      steps: sim.steps,
+    });
+  }
+  return arr;
+}
+
+// Preparar visualização da geração atual: escolhe topK, mede passos e zera stepIdx
+function prepareGenerationVisualization() {
+  const geneToShow = ga.globalBestGene || ga.bestGene;
+  currentBestSim = simulate(geneToShow);
+  candidates = topKCandidates(CANDIDATES_TO_SHOW);
+  currentMaxStep = 0;
+  for (const c of candidates)
+    currentMaxStep = Math.max(currentMaxStep, c.path.length);
+  if (!Number.isFinite(currentMaxStep) || currentMaxStep <= 0)
+    currentMaxStep = MAX_STEPS + 1;
+  stepIdx = 0;
+  if (generationEl) generationEl.textContent = String(gen);
+  if (fitnessEl) fitnessEl.textContent = Number(ga.globalBestFit).toFixed(2);
+  if (individualsEl)
+    individualsEl.textContent = `${candidates.length}/${ga.pop.length}`;
+  if (statusEl)
+    statusEl.textContent = `Em execução… Geração ${gen} — Passo ${
+      Math.min(stepIdx, currentMaxStep - 1) + 1
+    }/${currentMaxStep}`;
+}
+
+// Passo 7 — Desenho dos candidatos (caminhos) com cores e brilho
+function drawCandidates() {
+  withCentered(() => {
+    candidates.forEach((cnd, idx) => {
+      const hue = (gen * 12 + idx * 30) % 360;
+      const col = hsl(hue, 85, 60);
+      ctx.beginPath();
+      const alpha = Math.min(1, 0.25 + (idx === 0 ? 0.7 : 1 / (idx + 1)));
+      ctx.strokeStyle = col;
+      ctx.globalAlpha = alpha * 0.9;
+      ctx.lineWidth = Math.max(2, cellSize * 0.28 - idx * 0.06);
+      ctx.lineJoin = ctx.lineCap = "round";
+      let started = false;
+      const limit = Math.min(cnd.path.length, stepIdx + 1);
+      for (let i = 0; i < limit; i++) {
+        const p = cnd.path[i];
+        const x = p.c * cellSize + cellSize / 2;
+        const y = p.r * cellSize + cellSize / 2;
+        if (!started) {
+          ctx.moveTo(x, y);
+          started = true;
+        } else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // brilho leve (menor blur para reduzir custo de renderização)
+      ctx.shadowBlur = 3;
+      ctx.shadowColor = col;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    });
+  });
+}
+
+// Passo 8 — Marcadores: Desenha L (start) e G (goal) por cima com fundo para legibilidade
+function drawStartGoalTop() {
+  withCentered(() => {
+    function roundedRect(x, y, w, h, r) {
+      const rr = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+    }
+
+    // Configurar tipografia centralizada
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `${Math.floor(cellSize * 0.6)}px serif`;
+
+    // Função auxiliar para desenhar um marcador com fundo e letra
+    function drawMarker(cellR, cellC, bgColor, text, textColor) {
+      const x = cellC * cellSize;
+      const y = cellR * cellSize;
+      const pad = Math.max(4, Math.floor(cellSize * 0.12));
+      const bw = cellSize - pad * 2;
+      const bh = cellSize - pad * 2;
+      // fundo escuro semi-transparente
+      ctx.fillStyle = bgColor;
+      roundedRect(x + pad, y + pad, bw, bh, Math.floor(cellSize * 0.18));
+      ctx.fill();
+
+      // opcional: leve contorno para acento
+      ctx.lineWidth = Math.max(1, Math.floor(cellSize * 0.03));
+      ctx.strokeStyle = "rgba(255,255,255,0.06)";
+      ctx.stroke();
+
+      // letra com leve brilho
+      ctx.fillStyle = textColor;
+      const cx = x + cellSize / 2;
+      const cy = y + cellSize / 2;
+      const prevShadowBlur = ctx.shadowBlur;
+      const prevShadowColor = ctx.shadowColor;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = textColor;
+      ctx.fillText(text, cx, cy);
+      ctx.shadowBlur = prevShadowBlur;
+      ctx.shadowColor = prevShadowColor;
+    }
+
+    // L (início)
+    drawMarker(0, 0, "rgba(7, 16, 24, 1)", "L", "#7ee7c1");
+    // G (objetivo)
+    drawMarker(ROWS - 1, COLS - 1, "rgba(7,16,24,1)", "G", "#ffd37a");
+  });
+}
+
+// Passo 9 — Loop de animação (evolução simulada por geração)
+function tick() {
+  if (!running) return;
+
+  // Inicialização da primeira geração
+  if (!ga.initialized) {
+    initGA();
+    gen = 1;
+    prepareGenerationVisualization();
+  }
+
+  // Desenhar o estado atual (até stepIdx)
+  drawGrid();
+  drawCandidates();
+  drawStartGoalTop();
+
+  // Atualizar status com passo atual
+  if (statusEl)
+    statusEl.textContent = `Em execução… Geração ${gen} — Passo ${
+      Math.min(stepIdx, currentMaxStep - 1) + 1
+    }/${currentMaxStep}`;
+
+  // Se o melhor já alcança o objetivo e o passo exibido cobre o fim, finaliza
+  if (
+    currentBestSim &&
+    currentBestSim.reached &&
+    stepIdx >= currentBestSim.steps
+  ) {
+    running = false;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    statusEl.textContent = `Solução encontrada — passos ${currentBestSim.steps}, geração ${gen}`;
+    // destaque final do melhor caminho
+    withCentered(() => {
+      const p = currentBestSim.path;
+      ctx.beginPath();
+      ctx.lineWidth = Math.max(3, cellSize * 0.35);
+      ctx.strokeStyle = "transparent";
+      ctx.shadowBlur = 18;
+      ctx.shadowColor = "transparent";
+      for (let i = 0; i < p.length; i++) {
+        const x = p[i].c * cellSize + cellSize / 2;
+        const y = p[i].r * cellSize + cellSize / 2;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    });
+    drawStartGoalTop();
+    return;
+  }
+
+  // Avançar passo ou evoluir geração
+  if (stepIdx < currentMaxStep - 1) {
+    stepIdx++;
+  } else {
+    evolveOneGeneration();
+    gen++;
+    prepareGenerationVisualization();
+  }
+
+  animId = requestAnimationFrame(() => setTimeout(tick, STEP_DELAY_MS));
+}
+
+// Passo 10 — Controles: iniciar/pausar simulação
+function resetGA() {
+  ga = {
+    pop: [],
+    fits: [],
+    bestGene: null,
+    bestFit: -Infinity,
+    globalBestGene: null,
+    globalBestFit: -Infinity,
+    initialized: false,
+  };
+}
+
+startBtn.addEventListener("click", () => {
+  if (running) return;
+  running = true;
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  gen = 0;
+  statusEl.textContent = "Em execução…";
+  // limpar qualquer trilha anterior antes de iniciar
+  candidates = [];
+  // resetar estado do GA
+  resetGA();
+  // garantir campo de distâncias atualizado antes de iniciar
+  computeDistanceField();
+  if (!startIsReachable()) {
+    running = false;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    statusEl.textContent =
+      "Sem caminho do início ao objetivo com o labirinto atual. Edite para abrir passagem.";
+    drawGrid();
+    drawStartGoalTop();
+    return;
+  }
+  // resetar visualização por passos
+  stepIdx = 0;
+  currentMaxStep = 0;
+  currentBestSim = null;
+  drawGrid();
+  drawStartGoalTop();
+  generationEl.textContent = "0";
+  fitnessEl.textContent = "—";
+  if (individualsEl) individualsEl.textContent = `0/${POP_SIZE}`;
+  tick();
+});
+stopBtn.addEventListener("click", () => {
+  running = false;
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  if (animId) cancelAnimationFrame(animId);
+  statusEl.textContent = "Parado";
+  // limpar trilhas ao parar
+  candidates = [];
+  // opcional: limpar estado do GA para próxima execução
+  resetGA();
+  // resetar visualização por passos
+  stepIdx = 0;
+  currentMaxStep = 0;
+  currentBestSim = null;
+  drawGrid();
+  drawStartGoalTop();
+  if (individualsEl) individualsEl.textContent = `0/${POP_SIZE}`;
+});
+
+// Passo 11 — Modo edição do labirinto
+editBtn.addEventListener("click", () => {
+  // Volta ao comportamento simples: somente alterna o modo edição do labirinto
+  editMode = !editMode;
+  editBtn.setAttribute("aria-pressed", String(editMode));
+  statusEl.textContent = editMode ? "Editando" : "Pronto";
+});
+
+// clearBtn.addEventListener("click", () => {
+//   if (running) return;
+//   for (let r = 0; r < ROWS; r++) {
+//     for (let c = 0; c < COLS; c++) {
+//       // manter S e G livres (e todo resto limpo)
+//       GRID[r][c] = 0;
+//     }
+//   }
+//   drawGrid();
+//   drawStartGoalTop();
+// });
+
+// Passo 12 — Eventos de mouse (pintura de paredes no modo edição)
+canvas.addEventListener("contextmenu", (e) => {
+  if (editMode) e.preventDefault();
+});
+
+canvas.addEventListener("mousedown", (e) => {
+  if (!editMode || running) return;
+  const cell = cellFromEvent(e);
+  if (!cell) return;
+  const { r, c } = cell;
+  // não permitir parede em S ou G
+  if ((r === 0 && c === 0) || (r === GOAL_R && c === GOAL_C)) return;
+  const newVal = GRID[r][c] === 1 ? 0 : 1;
+  painting = newVal;
+  GRID[r][c] = newVal;
+  // recomputar campo de distâncias sempre que o grid muda
+  computeDistanceField();
+  drawGrid();
+  drawStartGoalTop();
+});
+
+canvas.addEventListener("mousemove", (e) => {
+  if (!editMode || running || painting === null) return;
+  const cell = cellFromEvent(e);
+  if (!cell) return;
+  const { r, c } = cell;
+  if ((r === 0 && c === 0) || (r === GOAL_R && c === GOAL_C)) return;
+  if (GRID[r][c] !== painting) {
+    GRID[r][c] = painting;
+    computeDistanceField();
+    drawGrid();
+    drawStartGoalTop();
+  }
+});
+
+window.addEventListener("mouseup", () => {
+  if (painting !== null) painting = null;
+});
+
+// Painel de edição — handlers
+if (popSizeInput) {
+  popSizeInput.addEventListener("change", () => {
+    if (running) return; // não alterar durante execução
+    let val = parseInt(popSizeInput.value, 10);
+    if (Number.isNaN(val)) val = POP_SIZE;
+    const clamped = Math.min(500, Math.max(10, val));
+    POP_SIZE = clamped;
+    popSizeInput.value = String(clamped);
+    // Alterar população exige reinicializar o GA
+    resetGA();
+    candidates = [];
+    if (individualsEl) individualsEl.textContent = `0/${POP_SIZE}`;
+    statusEl.textContent = `Editando (população ${POP_SIZE})`;
+  });
+}
+
+function updateSpeedFromSlider(vRaw) {
+  let v = parseInt(vRaw, 10);
+  if (Number.isNaN(v)) v = STEP_DELAY_MS;
+  v = Math.max(0, Math.min(200, v));
+  STEP_DELAY_MS = v;
+  if (speedSlider) speedSlider.value = String(v);
+  if (speedValue) speedValue.textContent = `${v} ms`;
+  if (!running) statusEl.textContent = `Editando (velocidade ${v} ms)`;
+}
+
+if (speedSlider) {
+  speedSlider.addEventListener("input", () =>
+    updateSpeedFromSlider(speedSlider.value)
+  );
+  speedSlider.addEventListener("change", () =>
+    updateSpeedFromSlider(speedSlider.value)
+  );
+}
+
+// Passo 13 — Estado inicial e listeners globais
+// estado inicial: sem caminhos no labirinto
+stopBtn.disabled = true;
+candidates = [];
+// pré-computar campo de distâncias inicial
+computeDistanceField();
+// garantir que o canvas ocupe o espaço disponível
+resizeCanvas();
+if (statusEl) statusEl.textContent = "Pronto";
+if (generationEl) generationEl.textContent = "—";
+if (fitnessEl) fitnessEl.textContent = "—";
+if (individualsEl) individualsEl.textContent = `0/${POP_SIZE}`;
+if (speedValue) speedValue.textContent = `${STEP_DELAY_MS} ms`;
+if (speedSlider) speedSlider.value = String(STEP_DELAY_MS);
+
+// redimensionar responsivamente
+let resizeRaf = null;
+window.addEventListener("resize", () => {
+  if (resizeRaf) cancelAnimationFrame(resizeRaf);
+  resizeRaf = requestAnimationFrame(resizeCanvas);
+});
