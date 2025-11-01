@@ -360,7 +360,7 @@
                 min="0"
                 max="200"
                 step="5"
-                value="10"
+                value="70"
                 style="width: 100%"
               />
               <span
@@ -479,10 +479,127 @@
 
       // Controle de animação por passo (dentro de cada geração)
       const CANDIDATES_TO_SHOW = 8; // quantos indivíduos destacar na tela
-      let STEP_DELAY_MS = 10; // atraso entre passos (ms) — padrão inicial mais rápido
+      let STEP_DELAY_MS = 70; // atraso entre passos (ms) — padrão inicial mais rápido
       let stepIdx = 0; // índice do passo atual sendo exibido
       let currentMaxStep = 0; // maior quantidade de passos entre os candidatos atuais
       let currentBestSim = null; // simulação do melhor indivíduo da geração atual
+      // Confete — estado e utilitários (isolados para não afetar o resto)
+      let confetti = {
+        active: false,
+        id: null,
+        particles: [],
+        endTime: 0,
+        base: null,
+      };
+
+      function stopConfetti() {
+        if (confetti.id) cancelAnimationFrame(confetti.id);
+        confetti = {
+          active: false,
+          id: null,
+          particles: [],
+          endTime: 0,
+          base: null,
+        };
+      }
+
+      function spawnConfettiParticles(count = 220) {
+        const parts = [];
+        const W = canvas.width,
+          H = canvas.height;
+        for (let i = 0; i < count; i++) {
+          const x = Math.random() * W;
+          const y = -20 - Math.random() * 80; // começa acima
+          const vx = (Math.random() - 0.5) * 4.5;
+          const vy = -Math.random() * 2 - 1.5;
+          const size = 3 + Math.random() * 7;
+          const rot = Math.random() * Math.PI * 2;
+          const vrot = (Math.random() - 0.5) * 0.25;
+          const color = ["#7aa2ff", "#ff7ab6", "#6ee7b7", "#ffd37a", "#9aa3b2"][
+            (Math.random() * 5) | 0
+          ];
+          const shape = (Math.random() * 3) | 0; // 0=rect,1=circle,2=tri
+          parts.push({ x, y, vx, vy, size, rot, vrot, color, shape });
+        }
+        return parts;
+      }
+
+      function drawConfettiParticles(parts) {
+        for (const p of parts) {
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.rot);
+          ctx.fillStyle = p.color;
+          if (p.shape === 0) {
+            ctx.fillRect(
+              -p.size * 0.6,
+              -p.size * 0.4,
+              p.size * 1.2,
+              p.size * 0.8
+            );
+          } else if (p.shape === 1) {
+            ctx.beginPath();
+            ctx.arc(0, 0, p.size * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            ctx.beginPath();
+            ctx.moveTo(0, -p.size * 0.6);
+            ctx.lineTo(p.size * 0.6, p.size * 0.6);
+            ctx.lineTo(-p.size * 0.6, p.size * 0.6);
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+      }
+
+      function startConfetti(durationMs = 4500) {
+        // Captura a cena final atual para reimprimir a cada frame
+        try {
+          confetti.base = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        } catch (e) {
+          // Fallback: se falhar, apenas não usa base (ainda assim desenha por cima)
+          confetti.base = null;
+        }
+        confetti.active = true;
+        confetti.particles = spawnConfettiParticles();
+        confetti.endTime = performance.now() + durationMs;
+
+        const gravity = 0.12,
+          drag = 0.996;
+        function frame() {
+          if (!confetti.active) return;
+          // Redesenhar base para evitar rastros
+          if (confetti.base) ctx.putImageData(confetti.base, 0, 0);
+          // Atualizar e desenhar partículas
+          for (const p of confetti.particles) {
+            p.vx *= drag;
+            p.vy = p.vy * drag + gravity;
+            p.x += p.vx;
+            p.y += p.vy;
+            p.rot += p.vrot;
+            // recicla fora da tela
+            if (
+              p.y > canvas.height + 30 ||
+              p.x < -30 ||
+              p.x > canvas.width + 30
+            ) {
+              p.x = Math.random() * canvas.width;
+              p.y = -20 - Math.random() * 60;
+              p.vx = (Math.random() - 0.5) * 4;
+              p.vy = -Math.random() * 2 - 1.2;
+              p.rot = Math.random() * Math.PI * 2;
+            }
+          }
+          drawConfettiParticles(confetti.particles);
+          if (performance.now() < confetti.endTime) {
+            confetti.id = requestAnimationFrame(frame);
+          } else {
+            stopConfetti();
+          }
+        }
+        confetti.id = requestAnimationFrame(frame);
+      }
 
       // Passo 2 — Utilitários
       // hsl: gera string de cor CSS em HSL. Único utilitário necessário nesta UI.
@@ -519,6 +636,79 @@
             }
           }
         });
+      }
+
+      // Desenha dois olhos na cabeça, orientados pela direção do último movimento
+      // hx, hy: posição da cabeça em pixels; px, py: posição anterior em pixels (pode ser null)
+      // headR: raio da cabeça em pixels
+      function drawEyes(hx, hy, px, py, headR) {
+        // Se a cabeça for muito pequena, olhos pouco visíveis — pular para evitar ruído visual
+        if (headR < 1.2) return;
+
+        // Vetor de direção (frente) baseado no último segmento
+        let fx = 1,
+          fy = 0; // padrão: olhando para a direita
+        if (
+          typeof px === "number" &&
+          typeof py === "number" &&
+          Number.isFinite(px) &&
+          Number.isFinite(py)
+        ) {
+          const dx = hx - px;
+          const dy = hy - py;
+          const len = Math.hypot(dx, dy);
+          if (len > 0.0001) {
+            fx = dx / len;
+            fy = dy / len;
+          }
+        }
+
+        // Vetor lateral (olhos) — perpendicular ao vetor frente
+        const sx = -fy;
+        const sy = fx;
+
+        // Parâmetros visuais escaláveis
+        const eyeOffset = Math.min(headR * 0.55, Math.max(1, headR * 0.42));
+        const eyeR = Math.max(0.9, headR * 0.26);
+        const pupilOffset = Math.min(headR * 0.35, eyeR * 0.8);
+        const pupilR = Math.max(0.6, eyeR * 0.55);
+
+        const ex1 = hx + sx * eyeOffset;
+        const ey1 = hy + sy * eyeOffset;
+        const ex2 = hx - sx * eyeOffset;
+        const ey2 = hy - sy * eyeOffset;
+
+        const prevAlpha = ctx.globalAlpha;
+
+        // Olhos (brancos)
+        ctx.globalAlpha = Math.min(1, prevAlpha * 1.05);
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(ex1, ey1, eyeR, 0, Math.PI * 2);
+        ctx.arc(ex2, ey2, eyeR, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Contorno suave dos olhos para definição
+        ctx.lineWidth = Math.max(0.8, Math.floor(headR * 0.12));
+        ctx.strokeStyle = "rgba(0,0,0,0.45)";
+        ctx.beginPath();
+        ctx.arc(ex1, ey1, eyeR, 0, Math.PI * 2);
+        ctx.arc(ex2, ey2, eyeR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Pupilas pretas, levemente voltadas para frente
+        const px1 = ex1 + fx * pupilOffset;
+        const py1 = ey1 + fy * pupilOffset;
+        const px2 = ex2 + fx * pupilOffset;
+        const py2 = ey2 + fy * pupilOffset;
+
+        ctx.fillStyle = "#0b0f14";
+        ctx.beginPath();
+        ctx.arc(px1, py1, pupilR, 0, Math.PI * 2);
+        ctx.arc(px2, py2, pupilR, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.globalAlpha = prevAlpha;
       }
 
       // Passo 4 — Redimensionamento responsivo do canvas
@@ -847,11 +1037,13 @@
       // Passo 7 — Desenho dos candidatos (caminhos) com cores e brilho
       function drawCandidates() {
         withCentered(() => {
+          // Primeiro desenhamos TODAS as trilhas
+          const heads = [];
           candidates.forEach((cnd, idx) => {
             const hue = (gen * 12 + idx * 30) % 360;
             const col = hsl(hue, 85, 60);
-            ctx.beginPath();
             const alpha = Math.min(1, 0.25 + (idx === 0 ? 0.7 : 1 / (idx + 1)));
+            ctx.beginPath();
             ctx.strokeStyle = col;
             ctx.globalAlpha = alpha * 0.9;
             ctx.lineWidth = Math.max(2, cellSize * 0.28 - idx * 0.06);
@@ -875,6 +1067,60 @@
             ctx.stroke();
             ctx.shadowBlur = 0;
             ctx.globalAlpha = 1;
+
+            // Guardar dados da cabeça para desenhar DEPOIS de todas as linhas
+            if (limit > 0 && cnd.path && cnd.path.length) {
+              const head = cnd.path[limit - 1];
+              if (head && Number.isFinite(head.c) && Number.isFinite(head.r)) {
+                const hx = head.c * cellSize + cellSize / 2;
+                const hy = head.r * cellSize + cellSize / 2;
+                const dotR = Math.max(
+                  1,
+                  Math.min(cellSize * 0.45, cellSize * 0.22)
+                );
+                let px = null,
+                  py = null;
+                if (limit > 1) {
+                  const prev = cnd.path[limit - 2];
+                  if (
+                    prev &&
+                    Number.isFinite(prev.c) &&
+                    Number.isFinite(prev.r)
+                  ) {
+                    px = prev.c * cellSize + cellSize / 2;
+                    py = prev.r * cellSize + cellSize / 2;
+                  }
+                }
+                heads.push({ hx, hy, px, py, dotR, col, alpha });
+              }
+            }
+          });
+
+          // Agora desenhamos TODAS as cabeças por cima de todas as trilhas
+          heads.forEach(({ hx, hy, px, py, dotR, col, alpha }) => {
+            const prevAlpha = ctx.globalAlpha;
+            const prevBlur = ctx.shadowBlur;
+            const prevColor = ctx.shadowColor;
+
+            const headAlpha = Math.min(1, alpha * 0.8 + 1.0);
+            ctx.globalAlpha = headAlpha;
+            ctx.shadowBlur = 2;
+            ctx.shadowColor = col;
+
+            ctx.beginPath();
+            ctx.arc(hx, hy, dotR, 0, Math.PI * 2);
+            ctx.fillStyle = col;
+            ctx.fill();
+
+            ctx.lineWidth = Math.max(1, Math.floor(cellSize * 0.15));
+            ctx.strokeStyle = "rgba(255,255,255,0.15)";
+            ctx.stroke();
+
+            drawEyes(hx, hy, px, py, dotR);
+
+            ctx.shadowBlur = prevBlur;
+            ctx.shadowColor = prevColor;
+            ctx.globalAlpha = prevAlpha;
           });
         });
       }
@@ -984,6 +1230,8 @@
             ctx.stroke();
           });
           drawStartGoalTop();
+          // Iniciar confetes por cima da cena final
+          startConfetti(4500);
           return;
         }
 
@@ -1014,6 +1262,7 @@
 
       startBtn.addEventListener("click", () => {
         if (running) return;
+        stopConfetti();
         running = true;
         startBtn.disabled = true;
         stopBtn.disabled = false;
@@ -1047,6 +1296,7 @@
         tick();
       });
       stopBtn.addEventListener("click", () => {
+        stopConfetti();
         running = false;
         startBtn.disabled = false;
         stopBtn.disabled = true;
