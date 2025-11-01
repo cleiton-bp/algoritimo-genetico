@@ -782,6 +782,7 @@
       // Campo de distâncias (BFS) até o objetivo considerando paredes
       // Útil para dar um gradiente de fitness mais informativo do que Manhattan em labirintos.
       let DIST = null; // matriz ROWS x COLS com distância mínima até GOAL; -1 para inalcançável
+      let MAX_DIST = 1; // maior distância válida no campo DIST (para normalização de fitness)
       function computeDistanceField() {
         const dist = Array.from({ length: ROWS }, () => Array(COLS).fill(-1));
         const q = [];
@@ -800,6 +801,15 @@
           }
         }
         DIST = dist;
+        // calcular MAX_DIST para normalizar proximidade no fitness
+        let md = 0;
+        for (let r = 0; r < ROWS; r++) {
+          for (let c = 0; c < COLS; c++) {
+            const v = dist[r][c];
+            if (v > md) md = v;
+          }
+        }
+        MAX_DIST = Math.max(1, md);
       }
 
       function startIsReachable() {
@@ -867,24 +877,47 @@
 
       function fitnessGA(gene) {
         const sim = simulate(gene);
+        // Recompensa muito alta para solução: garante dominância sobre não-soluções
         if (sim.reached) {
-          return 10000 + (MAX_STEPS - sim.steps) * 10 - sim.collisions * 2;
+          return 100000 + (MAX_STEPS - sim.steps) * 100 - sim.collisions * 20;
         }
-        // Preferir distância de grade (BFS) até o objetivo; fallback para Manhattan se indisponível
+
+        // Distância final ao objetivo (BFS quando possível)
         const dGrid = DIST ? DIST[sim.end[0]][sim.end[1]] : -1;
-        const d =
+        const dEff =
           dGrid >= 0
             ? dGrid
             : manhattan(sim.end[0], sim.end[1], GOAL[0], GOAL[1]);
-        // Também considerar a menor distância ao objetivo atingida ao longo do caminho
+
+        // Melhor aproximação ao longo do caminho
         let minD = Infinity;
         for (const p of sim.path) {
           const dd = DIST ? DIST[p.r][p.c] : -1;
           if (dd >= 0 && dd < minD) minD = dd;
         }
-        if (!Number.isFinite(minD)) minD = d;
-        // Penalização ponderada: distância final (mais forte) + melhor aproximação (moderada) + colisões + leve custo de passos
-        return -(d * 80 + minD * 30 + sim.collisions * 5 + sim.steps * 0.1);
+        if (!Number.isFinite(minD)) minD = dEff;
+
+        // Converter para "proximidade" normalizada (0 longe, 1 muito perto)
+        const maxD = Math.max(1, MAX_DIST);
+        const closeness = Math.max(
+          0,
+          Math.min(1, (maxD - Math.min(dEff, maxD)) / maxD)
+        );
+        const bestCloseness = Math.max(
+          0,
+          Math.min(1, (maxD - Math.min(minD, maxD)) / maxD)
+        );
+
+        // Recompensa não-linear que cresce MUITO mais perto do objetivo
+        // - termo cúbico para a distância final (foca no estado atual)
+        // - termo quadrático para a melhor aproximação (para não punir pequenos desvios)
+        const reward =
+          4000 * Math.pow(closeness, 3.0) + 1200 * Math.pow(bestCloseness, 2.0);
+
+        // Penalidades suaves para evitar caminhos ruins
+        const penalty = sim.collisions * 3 + sim.steps * 0.02;
+
+        return reward - penalty;
       }
 
       function tournamentSelect(pop, fits) {
